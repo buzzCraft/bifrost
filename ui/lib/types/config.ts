@@ -384,11 +384,20 @@ export interface FrameworkConfig {
 }
 
 // Auth config
+export interface EntraIDSSOConfig {
+	enabled: boolean;
+	client_id: EnvVar;
+	client_secret: EnvVar;
+	tenant_id: string;
+	callback_url: string;
+}
+
 export interface AuthConfig {
 	admin_username: EnvVar;
 	admin_password: EnvVar;
 	is_enabled: boolean;
 	disable_auth_on_inference?: boolean;
+	entraid_sso?: EntraIDSSOConfig;
 }
 
 // Global proxy type (for global proxy configuration, not per-provider)

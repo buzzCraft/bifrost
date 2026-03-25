@@ -3019,6 +3019,9 @@ func (s *RDBConfigStore) GetGovernanceConfig(ctx context.Context) (*GovernanceCo
 		var password *string
 		var isEnabled bool
 		var disableAuthOnInference bool
+		var ssoEnabled bool
+		var ssoClientID, ssoClientSecret, ssoTenantID, ssoCallbackURL string
+		hasSSOKeys := false
 		for _, entry := range governanceConfigs {
 			switch entry.Key {
 			case tables.ConfigAdminUsernameKey:
@@ -3029,6 +3032,21 @@ func (s *RDBConfigStore) GetGovernanceConfig(ctx context.Context) (*GovernanceCo
 				isEnabled = entry.Value == "true"
 			case tables.ConfigDisableAuthOnInferenceKey:
 				disableAuthOnInference = entry.Value == "true"
+			case tables.ConfigSSOEnabledKey:
+				ssoEnabled = entry.Value == "true"
+				hasSSOKeys = true
+			case tables.ConfigSSOClientIDKey:
+				ssoClientID = entry.Value
+				hasSSOKeys = true
+			case tables.ConfigSSOClientSecretKey:
+				ssoClientSecret = entry.Value
+				hasSSOKeys = true
+			case tables.ConfigSSOTenantIDKey:
+				ssoTenantID = entry.Value
+				hasSSOKeys = true
+			case tables.ConfigSSOCallbackURLKey:
+				ssoCallbackURL = entry.Value
+				hasSSOKeys = true
 			}
 		}
 		if username != nil && password != nil {
@@ -3037,6 +3055,15 @@ func (s *RDBConfigStore) GetGovernanceConfig(ctx context.Context) (*GovernanceCo
 				AdminPassword:          schemas.NewEnvVar(*password),
 				IsEnabled:              isEnabled,
 				DisableAuthOnInference: disableAuthOnInference,
+			}
+			if hasSSOKeys {
+				authConfig.EntraIDSSO = &EntraIDSSOConfig{
+					Enabled:      ssoEnabled,
+					ClientID:     schemas.NewEnvVar(ssoClientID),
+					ClientSecret: schemas.NewEnvVar(ssoClientSecret),
+					TenantID:     ssoTenantID,
+					CallbackURL:  ssoCallbackURL,
+				}
 			}
 		}
 	}
@@ -3083,11 +3110,49 @@ func (s *RDBConfigStore) GetAuthConfig(ctx context.Context) (*AuthConfig, error)
 	if username == nil || password == nil {
 		return nil, nil
 	}
-	return &AuthConfig{
+	authConfig := &AuthConfig{
 		AdminUserName:          schemas.NewEnvVar(*username),
 		AdminPassword:          schemas.NewEnvVar(*password),
 		IsEnabled:              isEnabled,
 		DisableAuthOnInference: disableAuthOnInference,
+	}
+
+	// Load SSO config
+	ssoConfig, err := s.getEntraIDSSOConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	authConfig.EntraIDSSO = ssoConfig
+
+	return authConfig, nil
+}
+
+// getEntraIDSSOConfig loads the EntraID SSO config from the database (returns nil if not configured).
+func (s *RDBConfigStore) getEntraIDSSOConfig(ctx context.Context) (*EntraIDSSOConfig, error) {
+	keys := []string{
+		tables.ConfigSSOEnabledKey,
+		tables.ConfigSSOClientIDKey,
+		tables.ConfigSSOClientSecretKey,
+		tables.ConfigSSOTenantIDKey,
+		tables.ConfigSSOCallbackURLKey,
+	}
+	rows := make([]tables.TableGovernanceConfig, 0, len(keys))
+	if err := s.db.WithContext(ctx).Where("key IN ?", keys).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	values := make(map[string]string, len(rows))
+	for _, row := range rows {
+		values[row.Key] = row.Value
+	}
+	return &EntraIDSSOConfig{
+		Enabled:      values[tables.ConfigSSOEnabledKey] == "true",
+		ClientID:     schemas.NewEnvVar(values[tables.ConfigSSOClientIDKey]),
+		ClientSecret: schemas.NewEnvVar(values[tables.ConfigSSOClientSecretKey]),
+		TenantID:     values[tables.ConfigSSOTenantIDKey],
+		CallbackURL:  values[tables.ConfigSSOCallbackURLKey],
 	}, nil
 }
 
@@ -3118,6 +3183,32 @@ func (s *RDBConfigStore) UpdateAuthConfig(ctx context.Context, config *AuthConfi
 		}).Error; err != nil {
 			return err
 		}
+
+		// Persist EntraID SSO config if provided
+		if config.EntraIDSSO != nil {
+			sso := config.EntraIDSSO
+			clientID := ""
+			if sso.ClientID != nil {
+				clientID = sso.ClientID.GetValue()
+			}
+			clientSecret := ""
+			if sso.ClientSecret != nil {
+				clientSecret = sso.ClientSecret.GetValue()
+			}
+			ssoRows := []tables.TableGovernanceConfig{
+				{Key: tables.ConfigSSOEnabledKey, Value: fmt.Sprintf("%t", sso.Enabled)},
+				{Key: tables.ConfigSSOClientIDKey, Value: clientID},
+				{Key: tables.ConfigSSOClientSecretKey, Value: clientSecret},
+				{Key: tables.ConfigSSOTenantIDKey, Value: sso.TenantID},
+				{Key: tables.ConfigSSOCallbackURLKey, Value: sso.CallbackURL},
+			}
+			for _, row := range ssoRows {
+				if err := tx.Save(&row).Error; err != nil {
+					return err
+				}
+			}
+		}
+
 		return nil
 	})
 }

@@ -43,6 +43,7 @@ export default function LoginView() {
 	const { data: isAuthEnabledData, isLoading: isLoadingIsAuthEnabled, error: isAuthEnabledError } = useIsAuthEnabledQuery();
 	const isAuthEnabled = isAuthEnabledData?.is_auth_enabled || false;
 	const hasValidToken = isAuthEnabledData?.has_valid_token || false;
+	const ssoEnabled = isAuthEnabledData?.sso_enabled || false;
 	const [login, { isLoading: isLoggingIn }] = useLoginMutation();
 
 	useEffect(() => {
@@ -82,6 +83,11 @@ export default function LoginView() {
 		}
 	};
 
+	const handleSSOLogin = () => {
+		// Redirect to the SSO login endpoint; the server will redirect to Microsoft
+		window.location.href = `/api/session/sso/login?redirect=${encodeURIComponent("/workspace")}`;
+	};
+
 	// Use light logo for SSR to avoid hydration mismatch
 	const logoSrc = mounted && resolvedTheme === "dark" ? "/bifrost-logo-dark.png" : "/bifrost-logo.png";
 
@@ -116,6 +122,39 @@ export default function LoginView() {
 						<h1 className="text-foreground text-lg font-semibold">Welcome back</h1>
 						<p className="text-muted-foreground text-sm">Sign in to your account to continue</p>
 					</div>
+
+					{/* EntraID SSO button */}
+					{ssoEnabled && (
+						<div className="space-y-3">
+							<Button
+								type="button"
+								variant="outline"
+								className="h-9 w-full text-sm flex items-center gap-2"
+								onClick={handleSSOLogin}
+								data-testid="sso-login-button"
+							>
+								{/* Microsoft logo SVG */}
+								<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 23 23" className="h-4 w-4" aria-hidden="true">
+									<path fill="#f3f3f3" d="M0 0h23v23H0z" />
+									<path fill="#f35325" d="M1 1h10v10H1z" />
+									<path fill="#81bc06" d="M12 1h10v10H12z" />
+									<path fill="#05a6f0" d="M1 12h10v10H1z" />
+									<path fill="#ffba08" d="M12 12h10v10H12z" />
+								</svg>
+								Sign in with Microsoft
+							</Button>
+
+							{/* Divider */}
+							<div className="relative">
+								<div className="absolute inset-0 flex items-center">
+									<span className="w-full border-t border-border" />
+								</div>
+								<div className="relative flex justify-center text-xs uppercase">
+									<span className="bg-card px-2 text-muted-foreground">or continue with</span>
+								</div>
+							</div>
+						</div>
+					)}
 
 					<form onSubmit={handleSubmit} className="space-y-5">
 						{errorMessage && <div className="bg-destructive/10 text-destructive rounded-sm p-3 text-sm">{errorMessage}</div>}

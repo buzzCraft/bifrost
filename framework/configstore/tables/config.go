@@ -10,6 +10,13 @@ const (
 	ConfigProxyKey                  = "proxy_config"
 	ConfigRestartRequiredKey        = "restart_required"
 	ConfigHeaderFilterKey           = "header_filter_config"
+
+	// EntraID SSO configuration keys
+	ConfigSSOEnabledKey      = "sso_enabled"
+	ConfigSSOClientIDKey     = "sso_client_id"
+	ConfigSSOClientSecretKey = "sso_client_secret"
+	ConfigSSOTenantIDKey     = "sso_tenant_id"
+	ConfigSSOCallbackURLKey  = "sso_callback_url"
 )
 
 // RestartRequiredConfig represents the restart required configuration

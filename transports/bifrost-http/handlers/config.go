@@ -145,12 +145,37 @@ func (h *ConfigHandler) getConfig(ctx *fasthttp.RequestCtx) {
 					FromEnv: false,
 				}
 			}
-			mapConfig["auth_config"] = map[string]any{
+			authConfigMap := map[string]any{
 				"admin_username":            authConfig.AdminUserName,
 				"admin_password":            passwordEnvVar,
 				"is_enabled":                authConfig.IsEnabled,
 				"disable_auth_on_inference": authConfig.DisableAuthOnInference,
 			}
+			// Include EntraID SSO config with redacted client secret
+			if authConfig.EntraIDSSO != nil {
+				var ssoSecretEnvVar *schemas.EnvVar
+				if authConfig.EntraIDSSO.ClientSecret != nil && authConfig.EntraIDSSO.ClientSecret.IsFromEnv() {
+					ssoSecretEnvVar = &schemas.EnvVar{
+						Val:     "",
+						EnvVar:  authConfig.EntraIDSSO.ClientSecret.EnvVar,
+						FromEnv: true,
+					}
+				} else {
+					ssoSecretEnvVar = &schemas.EnvVar{
+						Val:     "<redacted>",
+						EnvVar:  "",
+						FromEnv: false,
+					}
+				}
+				authConfigMap["entraid_sso"] = map[string]any{
+					"enabled":       authConfig.EntraIDSSO.Enabled,
+					"client_id":     authConfig.EntraIDSSO.ClientID,
+					"client_secret": ssoSecretEnvVar,
+					"tenant_id":     authConfig.EntraIDSSO.TenantID,
+					"callback_url":  authConfig.EntraIDSSO.CallbackURL,
+				}
+			}
+			mapConfig["auth_config"] = authConfigMap
 		} else {
 			// No auth config exists yet, return default empty EnvVar values
 			mapConfig["auth_config"] = map[string]any{
@@ -568,6 +593,12 @@ func (h *ConfigHandler) updateConfig(ctx *fasthttp.RequestCtx) {
 					}
 				}
 			}
+
+			// Preserve redacted EntraID SSO client secret
+			if payload.AuthConfig.EntraIDSSO != nil {
+				resolveEntraIDSSOClientSecret(payload.AuthConfig.EntraIDSSO, authConfig)
+			}
+
 			// Save auth config - this handles both first-time creation and updates
 			err = h.configManager.UpdateAuthConfig(ctx, payload.AuthConfig)
 			if err != nil {
@@ -583,6 +614,12 @@ func (h *ConfigHandler) updateConfig(ctx *fasthttp.RequestCtx) {
 			if payload.AuthConfig.AdminUserName == nil || payload.AuthConfig.AdminUserName.GetValue() == "" {
 				payload.AuthConfig.AdminUserName = authConfig.AdminUserName
 			}
+
+			// Preserve redacted EntraID SSO client secret
+			if payload.AuthConfig.EntraIDSSO != nil {
+				resolveEntraIDSSOClientSecret(payload.AuthConfig.EntraIDSSO, authConfig)
+			}
+
 			err = h.configManager.UpdateAuthConfig(ctx, payload.AuthConfig)
 			if err != nil {
 				logger.Warn("failed to update auth config: %v", err)
@@ -863,4 +900,18 @@ func validateHeaderFilterConfig(config *configstoreTables.GlobalHeaderFilterConf
 	}
 
 	return nil
+}
+
+// resolveEntraIDSSOClientSecret preserves the existing client secret when the payload contains a
+// redacted placeholder (the UI sends "<redacted>" instead of the real secret on save).
+func resolveEntraIDSSOClientSecret(sso *configstore.EntraIDSSOConfig, existing *configstore.AuthConfig) {
+	if sso.ClientSecret == nil || !sso.ClientSecret.IsRedacted() {
+		return
+	}
+	if existing == nil || existing.EntraIDSSO == nil || existing.EntraIDSSO.ClientSecret == nil {
+		// No existing secret to preserve — clear the redacted placeholder
+		sso.ClientSecret = &schemas.EnvVar{}
+		return
+	}
+	sso.ClientSecret = existing.EntraIDSSO.ClientSecret
 }

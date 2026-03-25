@@ -97,13 +97,17 @@ export default function SecurityView() {
 			authConfig.disable_auth_on_inference !== bifrostConfig?.auth_config?.disable_auth_on_inference;
 
 		const serverSSO = bifrostConfig?.auth_config?.entraid_sso;
+		// For the client secret, ignore changes if the value is the redacted placeholder (unchanged)
+		const ssoSecretActuallyChanged =
+			ssoConfig.client_secret?.value !== "<redacted>" &&
+			ssoConfig.client_secret?.value !== (serverSSO?.client_secret?.value ?? "");
 		const ssoChanged =
 			ssoConfig.enabled !== (serverSSO?.enabled ?? false) ||
 			ssoConfig.tenant_id !== (serverSSO?.tenant_id ?? "") ||
 			ssoConfig.callback_url !== (serverSSO?.callback_url ?? "") ||
 			ssoConfig.client_id?.value !== (serverSSO?.client_id?.value ?? "") ||
 			ssoConfig.client_id?.env_var !== (serverSSO?.client_id?.env_var ?? "") ||
-			ssoConfig.client_secret?.value !== (serverSSO?.client_secret?.value ?? "") ||
+			ssoSecretActuallyChanged ||
 			ssoConfig.client_secret?.env_var !== (serverSSO?.client_secret?.env_var ?? "");
 
 		const localRequired = localConfig.required_headers?.slice().sort().join(",");

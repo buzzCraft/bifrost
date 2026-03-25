@@ -1077,12 +1077,22 @@ func GeneratePluginHash(p tables.TablePlugin) (string, error) {
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
+// EntraIDSSOConfig represents Microsoft Entra ID (Azure AD) SSO configuration
+type EntraIDSSOConfig struct {
+	ClientID     *schemas.EnvVar `json:"client_id"`
+	ClientSecret *schemas.EnvVar `json:"client_secret"`
+	TenantID     string          `json:"tenant_id"`
+	CallbackURL  string          `json:"callback_url"`
+	Enabled      bool            `json:"enabled"`
+}
+
 // AuthConfig represents configured auth config for Bifrost dashboard
 type AuthConfig struct {
-	AdminUserName          *schemas.EnvVar `json:"admin_username"`
-	AdminPassword          *schemas.EnvVar `json:"admin_password"`
-	IsEnabled              bool            `json:"is_enabled"`
-	DisableAuthOnInference bool            `json:"disable_auth_on_inference"`
+	AdminUserName          *schemas.EnvVar   `json:"admin_username"`
+	AdminPassword          *schemas.EnvVar   `json:"admin_password"`
+	IsEnabled              bool              `json:"is_enabled"`
+	DisableAuthOnInference bool              `json:"disable_auth_on_inference"`
+	EntraIDSSO             *EntraIDSSOConfig `json:"entraid_sso,omitempty"`
 }
 
 // ConfigMap maps provider names to their configurations.

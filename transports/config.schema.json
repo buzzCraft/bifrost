@@ -1783,6 +1783,32 @@
         "disable_auth_on_inference": {
           "type": "boolean",
           "description": "Whether authentication is disabled on inference"
+        },
+        "entraid_sso": {
+          "type": "object",
+          "description": "Microsoft Entra ID (Azure AD) SSO configuration",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Whether EntraID SSO is enabled"
+            },
+            "client_id": {
+              "type": "string",
+              "description": "Azure App Registration client (application) ID"
+            },
+            "client_secret": {
+              "type": "string",
+              "description": "Azure App Registration client secret"
+            },
+            "tenant_id": {
+              "type": "string",
+              "description": "Azure Active Directory tenant ID"
+            },
+            "callback_url": {
+              "type": "string",
+              "description": "OAuth2 redirect URI registered in Azure (leave empty to auto-detect)"
+            }
+          }
         }
       },
       "additionalProperties": false

@@ -4,12 +4,13 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EnvVarInput } from "@/components/ui/envVarInput";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { IS_ENTERPRISE } from "@/lib/constants/config";
 import { getErrorMessage, useGetCoreConfigQuery, useUpdateCoreConfigMutation } from "@/lib/store";
-import { AuthConfig, CoreConfig, DefaultCoreConfig } from "@/lib/types/config";
+import { AuthConfig, CoreConfig, DefaultCoreConfig, EntraIDSSOConfig } from "@/lib/types/config";
 import { EnvVar } from "@/lib/types/schemas";
 import { parseArrayFromText } from "@/lib/utils/array";
 import { validateOrigins } from "@/lib/utils/validation";
@@ -44,6 +45,16 @@ export default function SecurityView() {
 		disable_auth_on_inference: false,
 	});
 
+	const defaultSSOConfig: EntraIDSSOConfig = {
+		enabled: false,
+		client_id: { value: "", env_var: "", from_env: false },
+		client_secret: { value: "", env_var: "", from_env: false },
+		tenant_id: "",
+		callback_url: "",
+	};
+
+	const [ssoConfig, setSSOConfig] = useState<EntraIDSSOConfig>(defaultSSOConfig);
+
 	useEffect(() => {
 		if (bifrostConfig && config) {
 			setLocalConfig(config);
@@ -55,6 +66,9 @@ export default function SecurityView() {
 		}
 		if (bifrostConfig?.auth_config) {
 			setAuthConfig(bifrostConfig.auth_config);
+			if (bifrostConfig.auth_config.entraid_sso) {
+				setSSOConfig(bifrostConfig.auth_config.entraid_sso);
+			}
 		}
 	}, [config, bifrostConfig]);
 
@@ -82,6 +96,16 @@ export default function SecurityView() {
 			passwordChanged ||
 			authConfig.disable_auth_on_inference !== bifrostConfig?.auth_config?.disable_auth_on_inference;
 
+		const serverSSO = bifrostConfig?.auth_config?.entraid_sso;
+		const ssoChanged =
+			ssoConfig.enabled !== (serverSSO?.enabled ?? false) ||
+			ssoConfig.tenant_id !== (serverSSO?.tenant_id ?? "") ||
+			ssoConfig.callback_url !== (serverSSO?.callback_url ?? "") ||
+			ssoConfig.client_id?.value !== (serverSSO?.client_id?.value ?? "") ||
+			ssoConfig.client_id?.env_var !== (serverSSO?.client_id?.env_var ?? "") ||
+			ssoConfig.client_secret?.value !== (serverSSO?.client_secret?.value ?? "") ||
+			ssoConfig.client_secret?.env_var !== (serverSSO?.client_secret?.env_var ?? "");
+
 		const localRequired = localConfig.required_headers?.slice().sort().join(",");
 		const serverRequired = config.required_headers?.slice().sort().join(",");
 		const requiredChanged = localRequired !== serverRequired;
@@ -89,8 +113,8 @@ export default function SecurityView() {
 		const enforceAuthOnInferenceChanged = localConfig.enforce_auth_on_inference !== config.enforce_auth_on_inference;
 		const allowDirectKeysChanged = localConfig.allow_direct_keys !== config.allow_direct_keys;
 
-		return originsChanged || headersChanged || requiredChanged || authChanged || enforceAuthOnInferenceChanged || allowDirectKeysChanged;
-	}, [config, localConfig, authConfig, bifrostConfig]);
+		return originsChanged || headersChanged || requiredChanged || authChanged || ssoChanged || enforceAuthOnInferenceChanged || allowDirectKeysChanged;
+	}, [config, localConfig, authConfig, ssoConfig, bifrostConfig]);
 
 	const needsRestart = useMemo(() => {
 		if (!config) return false;
@@ -139,6 +163,14 @@ export default function SecurityView() {
 		setAuthConfig((prev) => ({ ...prev, [field]: value }));
 	}, []);
 
+	const handleSSOToggle = useCallback((checked: boolean) => {
+		setSSOConfig((prev) => ({ ...prev, enabled: checked }));
+	}, []);
+
+	const handleSSOFieldChange = useCallback((field: keyof EntraIDSSOConfig, value: string | EnvVar) => {
+		setSSOConfig((prev) => ({ ...prev, [field]: value }));
+	}, []);
+
 	const handleSave = useCallback(async () => {
 		try {
 			const validation = validateOrigins(localConfig.allowed_origins);
@@ -151,16 +183,20 @@ export default function SecurityView() {
 			}
 			const hasUsername = authConfig.admin_username?.value || authConfig.admin_username?.env_var;
 			const hasPassword = authConfig.admin_password?.value || authConfig.admin_password?.env_var;
+			const finalAuthConfig: AuthConfig = {
+				...(authConfig.is_enabled && hasUsername && hasPassword ? authConfig : { ...authConfig, is_enabled: false }),
+				entraid_sso: ssoConfig,
+			};
 			await updateCoreConfig({
 				...bifrostConfig!,
 				client_config: localConfig,
-				auth_config: authConfig.is_enabled && hasUsername && hasPassword ? authConfig : { ...authConfig, is_enabled: false },
+				auth_config: finalAuthConfig,
 			}).unwrap();
 			toast.success("Security settings updated successfully.");
 		} catch (error) {
 			toast.error(getErrorMessage(error));
 		}
-	}, [bifrostConfig, localConfig, authConfig, updateCoreConfig]);
+	}, [bifrostConfig, localConfig, authConfig, ssoConfig, updateCoreConfig]);
 
 	return (
 		<div className="mx-auto w-full max-w-4xl space-y-4">
@@ -245,6 +281,83 @@ export default function SecurityView() {
 										disabled={!authConfig.is_enabled}
 										onCheckedChange={handleDisableAuthOnInferenceToggle}
 									/>
+								</div>
+							</div>
+						</div>
+					</div>
+				)}
+				{/* EntraID SSO */}
+				{!hideAuthDashboard && (
+					<div>
+						<div className="space-y-4 rounded-lg border p-4">
+							<div className="flex items-center justify-between">
+								<div className="space-y-0.5">
+									<Label htmlFor="sso-enabled" className="text-sm font-medium">
+										Microsoft Entra ID SSO <Badge variant="secondary">BETA</Badge>
+									</Label>
+									<p className="text-muted-foreground text-sm">
+										Allow users to sign in to the dashboard using their Microsoft Entra ID (Azure AD) account. Requires an App Registration
+										in your Azure tenant.
+									</p>
+								</div>
+								<Switch
+									id="sso-enabled"
+									data-testid="sso-enabled-switch"
+									checked={ssoConfig.enabled}
+									onCheckedChange={handleSSOToggle}
+								/>
+							</div>
+							<div className="space-y-4">
+								<div className="space-y-2">
+									<Label htmlFor="sso-tenant-id">Tenant ID</Label>
+									<Input
+										id="sso-tenant-id"
+										data-testid="sso-tenant-id-input"
+										type="text"
+										placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+										value={ssoConfig.tenant_id}
+										disabled={!ssoConfig.enabled}
+										onChange={(e) => handleSSOFieldChange("tenant_id", e.target.value)}
+									/>
+								</div>
+								<div className="space-y-2">
+									<Label htmlFor="sso-client-id">Client ID (Application ID)</Label>
+									<EnvVarInput
+										id="sso-client-id"
+										data-testid="sso-client-id-input"
+										type="text"
+										placeholder="Enter client ID or env.VAR_NAME"
+										value={ssoConfig.client_id}
+										disabled={!ssoConfig.enabled}
+										onChange={(value) => handleSSOFieldChange("client_id", value)}
+									/>
+								</div>
+								<div className="space-y-2">
+									<Label htmlFor="sso-client-secret">Client Secret</Label>
+									<EnvVarInput
+										id="sso-client-secret"
+										data-testid="sso-client-secret-input"
+										type="password"
+										placeholder="Enter client secret or env.VAR_NAME"
+										value={ssoConfig.client_secret}
+										disabled={!ssoConfig.enabled}
+										onChange={(value) => handleSSOFieldChange("client_secret", value)}
+									/>
+								</div>
+								<div className="space-y-2">
+									<Label htmlFor="sso-callback-url">Callback URL (optional)</Label>
+									<Input
+										id="sso-callback-url"
+										data-testid="sso-callback-url-input"
+										type="text"
+										placeholder="https://your-bifrost.example.com/api/session/sso/callback"
+										value={ssoConfig.callback_url}
+										disabled={!ssoConfig.enabled}
+										onChange={(e) => handleSSOFieldChange("callback_url", e.target.value)}
+									/>
+									<p className="text-muted-foreground text-xs">
+										Leave empty to auto-detect from the current request URL. Must match the Redirect URI registered in your Azure app.
+									</p>
 								</div>
 							</div>
 						</div>

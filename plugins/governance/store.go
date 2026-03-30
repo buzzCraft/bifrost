@@ -56,7 +56,7 @@ type GovernanceData struct {
 	VirtualKeys  map[string]*configstoreTables.TableVirtualKey  `json:"virtual_keys"`
 	Teams        map[string]*configstoreTables.TableTeam        `json:"teams"`
 	Customers    map[string]*configstoreTables.TableCustomer    `json:"customers"`
-	Users        map[string]*UserGovernance                     `json:"users"` // User-level governance (enterprise-only)
+	Users        map[string]*UserGovernance                     `json:"users"` // Per-user governance (budget & rate limits)
 	Budgets      map[string]*configstoreTables.TableBudget      `json:"budgets"`
 	RateLimits   map[string]*configstoreTables.TableRateLimit   `json:"rate_limits"`
 	RoutingRules map[string]*configstoreTables.TableRoutingRule `json:"routing_rules"`
@@ -64,7 +64,7 @@ type GovernanceData struct {
 	Providers    []*configstoreTables.TableProvider             `json:"providers"`
 }
 
-// UserGovernance holds governance data for a user (enterprise-only)
+// UserGovernance holds governance data for a user
 type UserGovernance struct {
 	UserID      string                            `json:"user_id"`
 	BudgetID    *string                           `json:"budget_id,omitempty"`
@@ -127,12 +127,12 @@ type GovernanceStore interface {
 	CreateCustomerInMemory(customer *configstoreTables.TableCustomer)
 	UpdateCustomerInMemory(customer *configstoreTables.TableCustomer, budgetBaselines map[string]float64)
 	DeleteCustomerInMemory(customerID string)
-	// User governance in-memory operations (enterprise-only, but interface defined here for compatibility)
+	// User governance in-memory operations (per-user governance, lock-free in-memory operations)
 	GetUserGovernance(userID string) (*UserGovernance, bool)
 	CreateUserGovernanceInMemory(userID string, budget *configstoreTables.TableBudget, rateLimit *configstoreTables.TableRateLimit)
 	UpdateUserGovernanceInMemory(userID string, budget *configstoreTables.TableBudget, rateLimit *configstoreTables.TableRateLimit)
 	DeleteUserGovernanceInMemory(userID string)
-	// User-level governance checks (enterprise-only)
+	// User-level governance checks
 	CheckUserBudget(ctx context.Context, userID string, request *EvaluationRequest, baselines map[string]float64) error
 	CheckUserRateLimit(ctx context.Context, userID string, request *EvaluationRequest, tokensBaselines map[string]int64, requestsBaselines map[string]int64) (error, Decision)
 	UpdateUserBudgetUsageInMemory(ctx context.Context, userID string, cost float64) error
@@ -379,7 +379,7 @@ func (gs *LocalGovernanceStore) GetGovernanceData() *GovernanceData {
 	sort.Slice(providersList, func(i, j int) bool {
 		return providersList[i].CreatedAt.Before(providersList[j].CreatedAt)
 	})
-	// Collect user governance data (enterprise-only)
+	// Collect user governance data 
 	users := make(map[string]*UserGovernance)
 	gs.users.Range(func(key, value interface{}) bool {
 		ug, ok := value.(*UserGovernance)
@@ -777,7 +777,7 @@ func (gs *LocalGovernanceStore) CheckModelBudget(ctx context.Context, request *E
 	return nil
 }
 
-// CheckUserBudget checks if user's budget allows the request (enterprise-only)
+// CheckUserBudget checks if user's budget allows the request 
 func (gs *LocalGovernanceStore) CheckUserBudget(ctx context.Context, userID string, request *EvaluationRequest, baselines map[string]float64) error {
 	if userID == "" {
 		return nil // No user, skip check
@@ -951,7 +951,7 @@ func (gs *LocalGovernanceStore) CheckModelRateLimit(ctx context.Context, request
 	return nil, DecisionAllow // No rate limit violations
 }
 
-// CheckUserRateLimit checks if user's rate limit allows the request (enterprise-only)
+// CheckUserRateLimit checks if user's rate limit allows the request 
 func (gs *LocalGovernanceStore) CheckUserRateLimit(ctx context.Context, userID string, request *EvaluationRequest, tokensBaselines map[string]int64, requestsBaselines map[string]int64) (error, Decision) {
 	if userID == "" {
 		return nil, DecisionAllow // No user, skip check
@@ -1233,7 +1233,7 @@ func (gs *LocalGovernanceStore) UpdateProviderAndModelBudgetUsageInMemory(ctx co
 	return nil
 }
 
-// UpdateUserBudgetUsageInMemory updates user's budget usage in memory (enterprise-only)
+// UpdateUserBudgetUsageInMemory updates user's budget usage in memory 
 func (gs *LocalGovernanceStore) UpdateUserBudgetUsageInMemory(ctx context.Context, userID string, cost float64) error {
 	if userID == "" || cost <= 0 {
 		return nil
@@ -1393,7 +1393,7 @@ func (gs *LocalGovernanceStore) UpdateVirtualKeyRateLimitUsageInMemory(ctx conte
 	return nil
 }
 
-// UpdateUserRateLimitUsageInMemory updates user's rate limit usage in memory (enterprise-only)
+// UpdateUserRateLimitUsageInMemory updates user's rate limit usage in memory 
 func (gs *LocalGovernanceStore) UpdateUserRateLimitUsageInMemory(ctx context.Context, userID string, tokensUsed int64, shouldUpdateTokens bool, shouldUpdateRequests bool) error {
 	if userID == "" {
 		return nil
@@ -2811,7 +2811,7 @@ func (gs *LocalGovernanceStore) DeleteCustomerInMemory(customerID string) {
 	gs.customers.Delete(customerID)
 }
 
-// GetUserGovernance retrieves user governance data by user ID (enterprise-only, lock-free)
+// GetUserGovernance retrieves user governance data by user ID (lock-free)
 func (gs *LocalGovernanceStore) GetUserGovernance(userID string) (*UserGovernance, bool) {
 	value, exists := gs.users.Load(userID)
 	if !exists || value == nil {
@@ -2824,7 +2824,7 @@ func (gs *LocalGovernanceStore) GetUserGovernance(userID string) (*UserGovernanc
 	return ug, true
 }
 
-// CreateUserGovernanceInMemory adds user governance data to the in-memory store (enterprise-only)
+// CreateUserGovernanceInMemory adds user governance data to the in-memory store 
 func (gs *LocalGovernanceStore) CreateUserGovernanceInMemory(userID string, budget *configstoreTables.TableBudget, rateLimit *configstoreTables.TableRateLimit) {
 	if userID == "" {
 		return
@@ -2849,7 +2849,7 @@ func (gs *LocalGovernanceStore) CreateUserGovernanceInMemory(userID string, budg
 	gs.users.Store(userID, ug)
 }
 
-// UpdateUserGovernanceInMemory updates user governance data in the in-memory store (enterprise-only)
+// UpdateUserGovernanceInMemory updates user governance data in the in-memory store 
 func (gs *LocalGovernanceStore) UpdateUserGovernanceInMemory(userID string, budget *configstoreTables.TableBudget, rateLimit *configstoreTables.TableRateLimit) {
 	if userID == "" {
 		return
@@ -2904,7 +2904,7 @@ func (gs *LocalGovernanceStore) UpdateUserGovernanceInMemory(userID string, budg
 	gs.users.Store(userID, ug)
 }
 
-// DeleteUserGovernanceInMemory removes user governance data from the in-memory store (enterprise-only)
+// DeleteUserGovernanceInMemory removes user governance data from the in-memory store 
 func (gs *LocalGovernanceStore) DeleteUserGovernanceInMemory(userID string) {
 	if userID == "" {
 		return

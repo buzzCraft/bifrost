@@ -3,6 +3,7 @@ import {
 	CreateCustomerRequest,
 	CreateModelConfigRequest,
 	CreateTeamRequest,
+	CreateUserRequest,
 	CreateVirtualKeyRequest,
 	Customer,
 	DebugStatsResponse,
@@ -16,6 +17,7 @@ import {
 	GetTeamsParams,
 	GetTeamsResponse,
 	GetUsageStatsResponse,
+	GetUsersResponse,
 	GetVirtualKeysParams,
 	GetVirtualKeysResponse,
 	HealthCheckResponse,
@@ -30,7 +32,9 @@ import {
 	UpdateProviderGovernanceRequest,
 	UpdateRateLimitRequest,
 	UpdateTeamRequest,
+	UpdateUserRequest,
 	UpdateVirtualKeyRequest,
+	User,
 	VirtualKey,
 } from "@/lib/types/governance";
 import { baseApi } from "./baseApi";
@@ -300,6 +304,107 @@ export const governanceApi = baseApi.injectEndpoints({
 					// Mutation failed
 				}
 			},
+		}),
+
+		// Users (per-user governance)
+		getUsers: builder.query<GetUsersResponse, void>({
+			query: () => "/governance/users",
+			providesTags: ["Users"],
+		}),
+
+		getUser: builder.query<{ user: User }, string>({
+			query: (userId) => `/governance/users/${encodeURIComponent(userId)}`,
+			providesTags: (result, error, userId) => [{ type: "Users", id: userId }],
+		}),
+
+		createUser: builder.mutation<{ message: string; user: User }, CreateUserRequest>({
+			query: (data) => ({
+				url: "/governance/users",
+				method: "POST",
+				body: data,
+			}),
+			async onQueryStarted(_arg, { dispatch, getState, queryFulfilled }) {
+				try {
+					const { data } = await queryFulfilled;
+					const queries = (getState() as any).api.queries;
+					for (const entry of Object.values(queries) as any[]) {
+						if (entry?.endpointName !== "getUsers" || entry?.status !== "fulfilled") continue;
+						dispatch(
+							governanceApi.util.updateQueryData("getUsers", entry.originalArgs, (draft) => {
+								if (!draft.users) draft.users = [];
+								draft.users.unshift(data.user);
+								draft.count = (draft.count || 0) + 1;
+							}),
+						);
+					}
+				} catch {
+					// Mutation failed
+				}
+			},
+			invalidatesTags: ["Users"],
+		}),
+
+		updateUser: builder.mutation<{ message: string; user: User }, { userId: string; data: UpdateUserRequest }>({
+			query: ({ userId, data }) => ({
+				url: `/governance/users/${encodeURIComponent(userId)}`,
+				method: "PUT",
+				body: data,
+			}),
+			async onQueryStarted({ userId }, { dispatch, getState, queryFulfilled }) {
+				try {
+					const { data } = await queryFulfilled;
+					const queries = (getState() as any).api.queries;
+					for (const entry of Object.values(queries) as any[]) {
+						if (entry?.endpointName !== "getUsers" || entry?.status !== "fulfilled") continue;
+						dispatch(
+							governanceApi.util.updateQueryData("getUsers", entry.originalArgs, (draft) => {
+								if (!draft.users) return;
+								const index = draft.users.findIndex((u) => u.user_id === userId);
+								if (index !== -1) {
+									draft.users[index] = data.user;
+								}
+							}),
+						);
+					}
+					dispatch(
+						governanceApi.util.updateQueryData("getUser", userId, (draft) => {
+							draft.user = data.user;
+						}),
+					);
+				} catch {
+					// Mutation failed
+				}
+			},
+			invalidatesTags: (result, error, { userId }) => [{ type: "Users", id: userId }],
+		}),
+
+		deleteUser: builder.mutation<{ message: string }, string>({
+			query: (userId) => ({
+				url: `/governance/users/${encodeURIComponent(userId)}`,
+				method: "DELETE",
+			}),
+			async onQueryStarted(userId, { dispatch, getState, queryFulfilled }) {
+				try {
+					await queryFulfilled;
+					const queries = (getState() as any).api.queries;
+					for (const entry of Object.values(queries) as any[]) {
+						if (entry?.endpointName !== "getUsers" || entry?.status !== "fulfilled") continue;
+						dispatch(
+							governanceApi.util.updateQueryData("getUsers", entry.originalArgs, (draft) => {
+								if (!draft.users) return;
+								const before = draft.users.length;
+								draft.users = draft.users.filter((u) => u.user_id !== userId);
+								if (draft.users.length < before) {
+									draft.count = Math.max(0, (draft.count || 0) - 1);
+								}
+							}),
+						);
+					}
+				} catch {
+					// Mutation failed
+				}
+			},
+			invalidatesTags: ["Users"],
 		}),
 
 		// Budgets
@@ -653,6 +758,13 @@ export const {
 	useUpdateCustomerMutation,
 	useDeleteCustomerMutation,
 
+	// Users
+	useGetUsersQuery,
+	useGetUserQuery,
+	useCreateUserMutation,
+	useUpdateUserMutation,
+	useDeleteUserMutation,
+
 	// Budgets
 	useGetBudgetsQuery,
 	useGetBudgetQuery,
@@ -692,6 +804,8 @@ export const {
 	useLazyGetTeamQuery,
 	useLazyGetCustomersQuery,
 	useLazyGetCustomerQuery,
+	useLazyGetUsersQuery,
+	useLazyGetUserQuery,
 	useLazyGetBudgetsQuery,
 	useLazyGetBudgetQuery,
 	useLazyGetRateLimitsQuery,

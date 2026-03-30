@@ -198,6 +198,32 @@ export interface UpdateCustomerRequest {
 	rate_limit?: UpdateRateLimitRequest;
 }
 
+// User governance types (per-user budget and rate limit enforcement)
+export interface User {
+	user_id: string;
+	budget_id?: string;
+	rate_limit_id?: string;
+	// Populated relationships
+	budget?: Budget;
+	rate_limit?: RateLimit;
+}
+
+export interface CreateUserRequest {
+	user_id: string;
+	budget?: CreateBudgetRequest;
+	rate_limit?: CreateRateLimitRequest;
+}
+
+export interface UpdateUserRequest {
+	budget?: UpdateBudgetRequest;
+	rate_limit?: UpdateRateLimitRequest;
+}
+
+export interface GetUsersResponse {
+	users: User[];
+	count: number;
+}
+
 export interface CreateBudgetRequest {
 	max_limit: number; // In dollars
 	reset_duration: string; // e.g., "30s", "5m", "1h", "1d", "1w", "1M"

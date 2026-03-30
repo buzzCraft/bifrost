@@ -74,6 +74,9 @@ const (
 // 8. Session Stickiness Headers:
 //   - x-bf-session-id: Session identifier for key binding (reuse same key across requests)
 //   - x-bf-session-ttl: Per-request TTL override (duration string e.g. "30m" or seconds integer)
+//
+// 9. Per-User Governance Header:
+//   - x-bf-user-id: User identifier for per-user budget and rate limit enforcement
 
 // Parameters:
 //   - ctx: The FastHTTP request context containing the original headers
@@ -157,6 +160,7 @@ func ConvertToBifrostContext(ctx *fasthttp.RequestCtx, allowDirectKeys bool, mat
 		"x-bf-api-key":    true,
 		"x-bf-api-key-id": true,
 		"x-bf-vk":         true,
+		"x-bf-user-id":    true,
 	}
 
 	// Debug: Log header matcher state
@@ -306,6 +310,13 @@ func ConvertToBifrostContext(ctx *fasthttp.RequestCtx, allowDirectKeys bool, mat
 		if keyStr == "x-bf-cache-no-store" {
 			if valueStr := string(value); valueStr == "true" {
 				bifrostCtx.SetValue(semanticcache.CacheNoStoreKey, true)
+			}
+			return true
+		}
+		// Per-user governance: user ID for budget and rate limit enforcement
+		if keyStr == "x-bf-user-id" {
+			if valueStr := strings.TrimSpace(string(value)); valueStr != "" {
+				bifrostCtx.SetValue(schemas.BifrostContextKeyGovernanceUserID, valueStr)
 			}
 			return true
 		}

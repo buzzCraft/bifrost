@@ -949,7 +949,7 @@ func (p *GovernancePlugin) evaluateGovernanceRequest(ctx *schemas.BifrostContext
 	// First evaluate model and provider checks (applies even when virtual keys are disabled or not present)
 	result := p.resolver.EvaluateModelAndProviderRequest(ctx, evaluationRequest.Provider, evaluationRequest.Model)
 
-	// Check user-level governance (enterprise-only, runs before VK checks)
+	// Check user-level governance (per-user budget and rate limit, runs before VK checks)
 	if result.Decision == DecisionAllow {
 		result = p.resolver.EvaluateUserRequest(ctx, evaluationRequest.UserID, evaluationRequest)
 	}
@@ -1037,7 +1037,7 @@ func (p *GovernancePlugin) PreLLMHook(ctx *schemas.BifrostContext, req *schemas.
 	}
 	// Extract governance headers and virtual key using utility functions
 	virtualKeyValue := bifrost.GetStringFromContext(ctx, schemas.BifrostContextKeyVirtualKey)
-	// Extract user ID for enterprise user-level governance
+	// Extract user ID for per-user governance
 	userID := bifrost.GetStringFromContext(ctx, schemas.BifrostContextKeyGovernanceUserID)
 	// Getting provider and mode from the request
 	provider, model, _ := req.GetRequestFields()
@@ -1081,7 +1081,7 @@ func (p *GovernancePlugin) PostLLMHook(ctx *schemas.BifrostContext, result *sche
 	// Extract governance information
 	virtualKey := bifrost.GetStringFromContext(ctx, schemas.BifrostContextKeyVirtualKey)
 	requestID := bifrost.GetStringFromContext(ctx, schemas.BifrostContextKeyRequestID)
-	// Extract user ID for enterprise user-level governance
+	// Extract user ID for per-user governance
 	userID := bifrost.GetStringFromContext(ctx, schemas.BifrostContextKeyGovernanceUserID)
 
 	// Extract cache and batch flags from context
@@ -1148,7 +1148,7 @@ func (p *GovernancePlugin) PreMCPHook(ctx *schemas.BifrostContext, req *schemas.
 
 	// Extract governance headers and virtual key using utility functions
 	virtualKeyValue := bifrost.GetStringFromContext(ctx, schemas.BifrostContextKeyVirtualKey)
-	// Extract user ID for enterprise user-level governance
+	// Extract user ID for per-user governance
 	userID := bifrost.GetStringFromContext(ctx, schemas.BifrostContextKeyGovernanceUserID)
 
 	// Create request context for evaluation (MCP requests don't have provider/model)
@@ -1265,7 +1265,7 @@ func (p *GovernancePlugin) Cleanup() error {
 //   - requestType: The type of the request
 //   - virtualKey: The virtual key of the request (empty string if not present)
 //   - requestID: The request ID
-//   - userID: The user ID for enterprise user-level governance (empty string if not present)
+//   - userID: The user ID for per-user governance (empty string if not present)
 //   - isCacheRead: Whether the request is a cache read
 //   - isBatch: Whether the request is a batch request
 //   - isFinalChunk: Whether the request is the final chunk

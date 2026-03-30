@@ -444,6 +444,42 @@ func (s *BifrostHTTPServer) RemoveModelConfig(ctx context.Context, id string) er
 	return nil
 }
 
+// GetUserGovernance retrieves user governance config from the in-memory store
+func (s *BifrostHTTPServer) GetUserGovernance(userID string) (*governance.UserGovernance, bool) {
+	governancePlugin, err := s.getGovernancePlugin()
+	if err != nil {
+		return nil, false
+	}
+	return governancePlugin.GetGovernanceStore().GetUserGovernance(userID)
+}
+
+// CreateUserGovernance creates per-user governance config in the in-memory store
+func (s *BifrostHTTPServer) CreateUserGovernance(userID string, budget *tables.TableBudget, rateLimit *tables.TableRateLimit) {
+	governancePlugin, err := s.getGovernancePlugin()
+	if err != nil {
+		return
+	}
+	governancePlugin.GetGovernanceStore().CreateUserGovernanceInMemory(userID, budget, rateLimit)
+}
+
+// UpdateUserGovernance updates per-user governance config in the in-memory store
+func (s *BifrostHTTPServer) UpdateUserGovernance(userID string, budget *tables.TableBudget, rateLimit *tables.TableRateLimit) {
+	governancePlugin, err := s.getGovernancePlugin()
+	if err != nil {
+		return
+	}
+	governancePlugin.GetGovernanceStore().UpdateUserGovernanceInMemory(userID, budget, rateLimit)
+}
+
+// DeleteUserGovernance removes per-user governance config from the in-memory store
+func (s *BifrostHTTPServer) DeleteUserGovernance(userID string) {
+	governancePlugin, err := s.getGovernancePlugin()
+	if err != nil {
+		return
+	}
+	governancePlugin.GetGovernanceStore().DeleteUserGovernanceInMemory(userID)
+}
+
 func (s *BifrostHTTPServer) ReloadProvider(ctx context.Context, provider schemas.ModelProvider) (*tables.TableProvider, error) {
 	if s.Config == nil || s.Config.ConfigStore == nil {
 		return nil, fmt.Errorf("config store not found")

@@ -40,6 +40,11 @@ type GovernanceManager interface {
 	RemoveProvider(ctx context.Context, provider schemas.ModelProvider) error
 	ReloadRoutingRule(ctx context.Context, id string) error
 	RemoveRoutingRule(ctx context.Context, id string) error
+	// User governance operations (in-memory only, no DB backing)
+	GetUserGovernance(userID string) (*governance.UserGovernance, bool)
+	CreateUserGovernance(userID string, budget *configstoreTables.TableBudget, rateLimit *configstoreTables.TableRateLimit)
+	UpdateUserGovernance(userID string, budget *configstoreTables.TableBudget, rateLimit *configstoreTables.TableRateLimit)
+	DeleteUserGovernance(userID string)
 }
 
 // GovernanceHandler manages HTTP requests for governance operations
@@ -229,6 +234,19 @@ type UpdateCustomerRequest struct {
 	RateLimit *UpdateRateLimitRequest `json:"rate_limit,omitempty"`
 }
 
+// CreateUserRequest represents the request body for creating per-user governance
+type CreateUserRequest struct {
+	UserID    string                  `json:"user_id" validate:"required"`
+	Budget    *CreateBudgetRequest    `json:"budget,omitempty"`
+	RateLimit *CreateRateLimitRequest `json:"rate_limit,omitempty"`
+}
+
+// UpdateUserRequest represents the request body for updating per-user governance
+type UpdateUserRequest struct {
+	Budget    *UpdateBudgetRequest    `json:"budget,omitempty"`
+	RateLimit *UpdateRateLimitRequest `json:"rate_limit,omitempty"`
+}
+
 // CreateModelConfigRequest represents the request body for creating a model config
 type CreateModelConfigRequest struct {
 	ModelName string                  `json:"model_name" validate:"required"`
@@ -273,6 +291,13 @@ func (h *GovernanceHandler) RegisterRoutes(r *router.Router, middlewares ...sche
 	r.GET("/api/governance/customers/{customer_id}", lib.ChainMiddlewares(h.getCustomer, middlewares...))
 	r.PUT("/api/governance/customers/{customer_id}", lib.ChainMiddlewares(h.updateCustomer, middlewares...))
 	r.DELETE("/api/governance/customers/{customer_id}", lib.ChainMiddlewares(h.deleteCustomer, middlewares...))
+
+	// User governance CRUD operations (in-memory, identified by user_id string)
+	r.GET("/api/governance/users", lib.ChainMiddlewares(h.getUsers, middlewares...))
+	r.POST("/api/governance/users", lib.ChainMiddlewares(h.createUser, middlewares...))
+	r.GET("/api/governance/users/{user_id}", lib.ChainMiddlewares(h.getUser, middlewares...))
+	r.PUT("/api/governance/users/{user_id}", lib.ChainMiddlewares(h.updateUser, middlewares...))
+	r.DELETE("/api/governance/users/{user_id}", lib.ChainMiddlewares(h.deleteUser, middlewares...))
 
 	// Budget and Rate Limit GET operations
 	r.GET("/api/governance/budgets", lib.ChainMiddlewares(h.getBudgets, middlewares...))
@@ -2082,6 +2107,245 @@ func validateBudget(budget *configstoreTables.TableBudget) error {
 		return fmt.Errorf("invalid budget reset duration format: %s", budget.ResetDuration)
 	}
 	return nil
+}
+
+// Model Config CRUD Operations
+
+// User Governance CRUD Operations
+
+// getUsers handles GET /api/governance/users - List all users with their governance config
+func (h *GovernanceHandler) getUsers(ctx *fasthttp.RequestCtx) {
+	data := h.governanceManager.GetGovernanceData()
+	if data == nil {
+		SendError(ctx, 500, "Governance data is not available")
+		return
+	}
+	users := make([]*governance.UserGovernance, 0, len(data.Users))
+	for _, u := range data.Users {
+		if u != nil {
+			clone := *u
+			users = append(users, &clone)
+		}
+	}
+	// Sort by user_id for stable ordering
+	sort.Slice(users, func(i, j int) bool {
+		return users[i].UserID < users[j].UserID
+	})
+	SendJSON(ctx, map[string]interface{}{
+		"users": users,
+		"count": len(users),
+	})
+}
+
+// createUser handles POST /api/governance/users - Create per-user governance config
+func (h *GovernanceHandler) createUser(ctx *fasthttp.RequestCtx) {
+	var req CreateUserRequest
+	if err := json.Unmarshal(ctx.PostBody(), &req); err != nil {
+		SendError(ctx, 400, "Invalid JSON")
+		return
+	}
+	if strings.TrimSpace(req.UserID) == "" {
+		SendError(ctx, 400, "user_id is required")
+		return
+	}
+	req.UserID = strings.TrimSpace(req.UserID)
+
+	// Check if user already exists
+	if _, exists := h.governanceManager.GetUserGovernance(req.UserID); exists {
+		SendError(ctx, 409, fmt.Sprintf("user governance already exists for user_id: %s", req.UserID))
+		return
+	}
+
+	var budget *configstoreTables.TableBudget
+	var rateLimit *configstoreTables.TableRateLimit
+
+	if req.Budget != nil {
+		if req.Budget.MaxLimit <= 0 {
+			SendError(ctx, 400, "budget max_limit must be greater than 0")
+			return
+		}
+		if req.Budget.ResetDuration == "" {
+			SendError(ctx, 400, "budget reset_duration is required")
+			return
+		}
+		if _, err := configstoreTables.ParseDuration(req.Budget.ResetDuration); err != nil {
+			SendError(ctx, 400, fmt.Sprintf("invalid budget reset_duration: %s", req.Budget.ResetDuration))
+			return
+		}
+		budget = &configstoreTables.TableBudget{
+			ID:            uuid.NewString(),
+			MaxLimit:      req.Budget.MaxLimit,
+			ResetDuration: req.Budget.ResetDuration,
+			LastReset:     time.Now(),
+			CurrentUsage:  0,
+		}
+	}
+
+	if req.RateLimit != nil {
+		if req.RateLimit.TokenMaxLimit == nil && req.RateLimit.RequestMaxLimit == nil {
+			SendError(ctx, 400, "rate_limit must have at least one of token_max_limit or request_max_limit")
+			return
+		}
+		if req.RateLimit.TokenMaxLimit != nil {
+			if *req.RateLimit.TokenMaxLimit <= 0 {
+				SendError(ctx, 400, "rate_limit token_max_limit must be greater than 0")
+				return
+			}
+			if req.RateLimit.TokenResetDuration == nil || *req.RateLimit.TokenResetDuration == "" {
+				SendError(ctx, 400, "rate_limit token_reset_duration is required when token_max_limit is set")
+				return
+			}
+			if _, err := configstoreTables.ParseDuration(*req.RateLimit.TokenResetDuration); err != nil {
+				SendError(ctx, 400, fmt.Sprintf("invalid rate_limit token_reset_duration: %s", *req.RateLimit.TokenResetDuration))
+				return
+			}
+		}
+		if req.RateLimit.RequestMaxLimit != nil {
+			if *req.RateLimit.RequestMaxLimit <= 0 {
+				SendError(ctx, 400, "rate_limit request_max_limit must be greater than 0")
+				return
+			}
+			if req.RateLimit.RequestResetDuration == nil || *req.RateLimit.RequestResetDuration == "" {
+				SendError(ctx, 400, "rate_limit request_reset_duration is required when request_max_limit is set")
+				return
+			}
+			if _, err := configstoreTables.ParseDuration(*req.RateLimit.RequestResetDuration); err != nil {
+				SendError(ctx, 400, fmt.Sprintf("invalid rate_limit request_reset_duration: %s", *req.RateLimit.RequestResetDuration))
+				return
+			}
+		}
+		rateLimit = &configstoreTables.TableRateLimit{
+			ID:                   uuid.NewString(),
+			TokenMaxLimit:        req.RateLimit.TokenMaxLimit,
+			TokenResetDuration:   req.RateLimit.TokenResetDuration,
+			RequestMaxLimit:      req.RateLimit.RequestMaxLimit,
+			RequestResetDuration: req.RateLimit.RequestResetDuration,
+			TokenLastReset:       time.Now(),
+			RequestLastReset:     time.Now(),
+		}
+	}
+
+	h.governanceManager.CreateUserGovernance(req.UserID, budget, rateLimit)
+
+	user, _ := h.governanceManager.GetUserGovernance(req.UserID)
+	SendJSON(ctx, map[string]interface{}{
+		"message": "User governance created successfully",
+		"user":    user,
+	})
+}
+
+// getUser handles GET /api/governance/users/{user_id} - Get a specific user's governance config
+func (h *GovernanceHandler) getUser(ctx *fasthttp.RequestCtx) {
+	userID := ctx.UserValue("user_id").(string)
+	user, exists := h.governanceManager.GetUserGovernance(userID)
+	if !exists {
+		SendError(ctx, 404, fmt.Sprintf("user governance not found for user_id: %s", userID))
+		return
+	}
+	SendJSON(ctx, map[string]interface{}{
+		"user": user,
+	})
+}
+
+// updateUser handles PUT /api/governance/users/{user_id} - Update a user's governance config
+func (h *GovernanceHandler) updateUser(ctx *fasthttp.RequestCtx) {
+	userID := ctx.UserValue("user_id").(string)
+
+	if _, exists := h.governanceManager.GetUserGovernance(userID); !exists {
+		SendError(ctx, 404, fmt.Sprintf("user governance not found for user_id: %s", userID))
+		return
+	}
+
+	var req UpdateUserRequest
+	if err := json.Unmarshal(ctx.PostBody(), &req); err != nil {
+		SendError(ctx, 400, "Invalid JSON")
+		return
+	}
+
+	var budget *configstoreTables.TableBudget
+	var rateLimit *configstoreTables.TableRateLimit
+
+	if req.Budget != nil {
+		// Empty budget means remove; non-empty means set/update
+		if req.Budget.MaxLimit != nil {
+			if *req.Budget.MaxLimit <= 0 {
+				SendError(ctx, 400, "budget max_limit must be greater than 0")
+				return
+			}
+			if req.Budget.ResetDuration == nil || *req.Budget.ResetDuration == "" {
+				SendError(ctx, 400, "budget reset_duration is required when max_limit is provided")
+				return
+			}
+			if _, err := configstoreTables.ParseDuration(*req.Budget.ResetDuration); err != nil {
+				SendError(ctx, 400, fmt.Sprintf("invalid budget reset_duration: %s", *req.Budget.ResetDuration))
+				return
+			}
+			budget = &configstoreTables.TableBudget{
+				ID:            uuid.NewString(),
+				MaxLimit:      *req.Budget.MaxLimit,
+				ResetDuration: *req.Budget.ResetDuration,
+				LastReset:     time.Now(),
+				CurrentUsage:  0,
+			}
+		}
+		// If req.Budget.MaxLimit == nil, budget remains nil (remove existing budget)
+	}
+
+	if req.RateLimit != nil {
+		if req.RateLimit.TokenMaxLimit != nil || req.RateLimit.RequestMaxLimit != nil {
+			if req.RateLimit.TokenMaxLimit != nil {
+				if *req.RateLimit.TokenMaxLimit <= 0 {
+					SendError(ctx, 400, "rate_limit token_max_limit must be greater than 0")
+					return
+				}
+				if req.RateLimit.TokenResetDuration == nil || *req.RateLimit.TokenResetDuration == "" {
+					SendError(ctx, 400, "rate_limit token_reset_duration is required when token_max_limit is set")
+					return
+				}
+			}
+			if req.RateLimit.RequestMaxLimit != nil {
+				if *req.RateLimit.RequestMaxLimit <= 0 {
+					SendError(ctx, 400, "rate_limit request_max_limit must be greater than 0")
+					return
+				}
+				if req.RateLimit.RequestResetDuration == nil || *req.RateLimit.RequestResetDuration == "" {
+					SendError(ctx, 400, "rate_limit request_reset_duration is required when request_max_limit is set")
+					return
+				}
+			}
+			rateLimit = &configstoreTables.TableRateLimit{
+				ID:                   uuid.NewString(),
+				TokenMaxLimit:        req.RateLimit.TokenMaxLimit,
+				TokenResetDuration:   req.RateLimit.TokenResetDuration,
+				RequestMaxLimit:      req.RateLimit.RequestMaxLimit,
+				RequestResetDuration: req.RateLimit.RequestResetDuration,
+				TokenLastReset:       time.Now(),
+				RequestLastReset:     time.Now(),
+			}
+		}
+		// If both limits are nil, rateLimit remains nil (remove existing rate limit)
+	}
+
+	h.governanceManager.UpdateUserGovernance(userID, budget, rateLimit)
+
+	user, _ := h.governanceManager.GetUserGovernance(userID)
+	SendJSON(ctx, map[string]interface{}{
+		"message": "User governance updated successfully",
+		"user":    user,
+	})
+}
+
+// deleteUser handles DELETE /api/governance/users/{user_id} - Delete a user's governance config
+func (h *GovernanceHandler) deleteUser(ctx *fasthttp.RequestCtx) {
+	userID := ctx.UserValue("user_id").(string)
+	if _, exists := h.governanceManager.GetUserGovernance(userID); !exists {
+		SendError(ctx, 404, fmt.Sprintf("user governance not found for user_id: %s", userID))
+		return
+	}
+	h.governanceManager.DeleteUserGovernance(userID)
+	SendJSON(ctx, map[string]interface{}{
+		"message": fmt.Sprintf("User governance for '%s' deleted successfully", userID),
+	})
 }
 
 // Model Config CRUD Operations
